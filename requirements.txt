@@ -1,6 +1,5 @@
 flask
 requests
-sqlite3-binary
 pandas
 numpy
 scikit-learn

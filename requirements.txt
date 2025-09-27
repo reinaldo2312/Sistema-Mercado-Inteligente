@@ -1,5 +1,15 @@
-
 flask
 requests
+sqlite3-binary
 pandas
+numpy
 scikit-learn
+mercadolibre-sdk
+mercadopago
+openai
+transformers
+tensorflow
+torch
+python-dotenv
+gunicorn
+

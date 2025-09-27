@@ -1,0 +1,112 @@
+# ai_helper.py
+import json
+from datetime import datetime
+
+MIN_MARGIN_PERCENT = 5.0  # exemplo de margem mínima aceitável (%)
+
+def now_iso():
+    return datetime.utcnow().isoformat()
+
+def validar_cliente(row):
+    """Valida dados mínimos do cliente; retorna (ok, correcoes)"""
+    correcoes = []
+    if not row.get("nome"):
+        correcoes.append("nome preenchido automatico: 'Cliente sem nome'")
+        row["nome"] = "Cliente sem nome"
+    return row, correcoes
+
+def validar_produto(row):
+    """Valida produto (nome e sku)"""
+    correcoes = []
+    if not row.get("nome"):
+        correcoes.append("nome preenchido automatico: 'Produto sem nome'")
+        row["nome"] = "Produto sem nome"
+    if not row.get("sku"):
+        correcoes.append("sku preenchido automatico")
+        row["sku"] = f"SKU-{int(datetime.utcnow().timestamp())}"
+    return row, correcoes
+
+def validar_vendedor(row):
+    """Valida vendedor (nome e reputacao)"""
+    correcoes = []
+    if not row.get("nome"):
+        correcoes.append("nome preenchido automatico: 'Vendedor sem nome'")
+        row["nome"] = "Vendedor sem nome"
+    if row.get("reputacao") is None:
+        correcoes.append("reputacao default 4.5 aplicada")
+        row["reputacao"] = 4.5
+    return row, correcoes
+
+def conferir_pedido(conn, pedido_row, ofertas):
+    """
+    Recebe pedido_row (dict) e lista de ofertas (do produto) e garante que
+    preco_fornecedor esteja consistente e calcula margem. Retorna (pedido_corrigido, correcoes)
+    """
+    correcoes = []
+    preco_cliente = float(pedido_row.get("preco_cliente", 0))
+    if not ofertas:
+        correcoes.append("nenhuma oferta encontrada para produto")
+        pedido_row["preco_fornecedor"] = None
+        pedido_row["margem"] = None
+        return pedido_row, correcoes
+
+    # usar a melhor oferta (menor preco)
+    melhor = sorted(ofertas, key=lambda o: (o.get("preco", 1e9) + (o.get("frete", 0) or 0)))[0]
+    preco_fornecedor = float(melhor.get("preco", 0)) + float(melhor.get("frete", 0) or 0)
+
+    # Se pedido não tem preco_fornecedor, definir
+    if pedido_row.get("preco_fornecedor") is None:
+        pedido_row["preco_fornecedor"] = preco_fornecedor
+        correcoes.append(f"preco_fornecedor ajustado para {preco_fornecedor}")
+
+    # Recalcular margem
+    margem = round(preco_cliente - preco_fornecedor, 2)
+    pedido_row["margem"] = margem
+
+    # Se margem negativa ou menor que % minimo, sugerir ajuste
+    if preco_cliente <= preco_fornecedor:
+        sugerido = round(preco_fornecedor * (1 + MIN_MARGIN_PERCENT/100), 2)
+        correcoes.append(f"preco_cliente <= preco_fornecedor; sugerir preco_cliente {sugerido}")
+    elif (margem / preco_cliente * 100) < MIN_MARGIN_PERCENT:
+        correcoes.append(f"margem baixa ({round(margem / preco_cliente * 100,2)}%). sugerir aumento.")
+
+    return pedido_row, correcoes
+
+def aplicar_correcoes(cursor, tabela, pk_name, pk_value, correcoes_map):
+    """
+    Aplica correcoes_map (dict col->valor) na tabela usando cursor (sqlite3.Cursor).
+    Retorna lista de alterações feitas (strings).
+    """
+    if not correcoes_map:
+        return []
+    sets = []
+    params = []
+    for k,v in correcoes_map.items():
+        sets.append(f"{k}=?")
+        params.append(v)
+    params.append(pk_value)
+    sql = f"UPDATE {tabela} SET {', '.join(sets)} WHERE {pk_name}=?"
+    cursor.execute(sql, params)
+    return [f"{tabela}.{k} atualizado" for k in correcoes_map.keys()]
+
+def limpar_pedidos_concluidos(conn):
+    """
+    Remove pedidos com status 'Concluído' e devolve lista de ids apagados.
+    (Use com cuidado; idealmente chamada por rota protegida)
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM pedidos WHERE status='Concluído'")
+    rows = cur.fetchall()
+    ids = [r[0] for r in rows]
+    if not ids:
+        return []
+    cur.execute("DELETE FROM pedidos WHERE status='Concluído'")
+    conn.commit()
+    return ids
+
+
+
+
+
+
+

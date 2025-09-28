@@ -1,6 +1,5 @@
-# app_mercado_inteligente.py
 from flask import Flask, request, jsonify
-import sqlite3, json, datetime
+import sqlite3, json, datetime, os
 from ai_orquestradora import Orquestradora
 import ai_miners
 from ai_postagem import poster_produtos
@@ -12,7 +11,7 @@ app = Flask(__name__)
 def init_db():
     con = sqlite3.connect(DB)
     cur = con.cursor()
-    
+
     # tabela produtos
     cur.execute("""
     CREATE TABLE IF NOT EXISTS produtos(
@@ -31,7 +30,7 @@ def init_db():
         ml_item_id TEXT
     )
     """)
-    
+
     # tabela vendedores
     cur.execute("""
     CREATE TABLE IF NOT EXISTS vendedores(
@@ -40,7 +39,7 @@ def init_db():
         reputacao REAL
     )
     """)
-    
+
     # tabela pedidos
     cur.execute("""
     CREATE TABLE IF NOT EXISTS pedidos(
@@ -51,7 +50,7 @@ def init_db():
         status TEXT
     )
     """)
-    
+
     # tabela eventos
     cur.execute("""
     CREATE TABLE IF NOT EXISTS eventos(
@@ -61,7 +60,7 @@ def init_db():
         criado_em TEXT
     )
     """)
-    
+
     con.commit()
     con.close()
 
@@ -81,6 +80,16 @@ def fetch_all(query):
     con.close()
     return rows
 
+# ---------- Dados simulados e Orquestradora ----------
+clientes = [{"id": 1, "nome": "João"}, {"id": 2, "nome": "Maria"}]
+produtos = [{"id": 1, "nome": "Tênis", "preco_vendedor": 100}]
+vendedores = [
+    {"produto_id": 1, "preco": 95},
+    {"produto_id": 1, "preco": 90},
+]
+
+orq = Orquestradora(clientes, produtos, vendedores)
+
 # ---------- Rotas ----------
 @app.route("/")
 def home():
@@ -94,18 +103,18 @@ def home():
     /ia/status<br>
     /orquestra<br>
     /miner/status<br>
-    /poster/run<br>
+    /poster/run (GET ou POST)<br>
     Use API (POST/GET) para interagir.
     """
 
 # --- produtos ---
 @app.route("/produtos", methods=["GET","POST"])
-def produtos():
+def produtos_route():
     if request.method == "POST":
         d = request.get_json()
         con = sqlite3.connect(DB)
         cur = con.cursor()
-        cur.execute("INSERT INTO produtos (nome, preco, estoque) VALUES (?,?,?)",
+        cur.execute("INSERT INTO produtos (nome, price, estoque) VALUES (?,?,?)",
                     (d["nome"], d["preco"], d["estoque"]))
         con.commit()
         con.close()
@@ -116,7 +125,7 @@ def produtos():
 
 # --- vendedores ---
 @app.route("/vendedores", methods=["GET","POST"])
-def vendedores():
+def vendedores_route():
     if request.method == "POST":
         d = request.get_json()
         con = sqlite3.connect(DB)
@@ -132,7 +141,7 @@ def vendedores():
 
 # --- ofertas ---
 @app.route("/ofertas", methods=["GET"])
-def ofertas():
+def ofertas_route():
     return jsonify({"melhor_oferta":"produtoX a R$ 50"})
 
 # --- pedidos ---
@@ -151,12 +160,19 @@ def pedidos_route():
     else:
         return jsonify(fetch_all("SELECT * FROM pedidos"))
 
-# --- eventos ---
+# --- eventos usando Orquestradora ---
 @app.route("/events", methods=["POST"])
 def events_post():
     d = request.get_json()
-    log_event(d.get("tipo","unknown"), d)
-    return jsonify({"ok":True}), 201
+    if not d:
+        return jsonify({"erro":"JSON inválido"}), 400
+
+    # processa com Orquestradora
+    pedido = orq.processar_evento(d)
+    if pedido:
+        return jsonify({"ok": True, "pedido": pedido}), 201
+    else:
+        return jsonify({"erro": "Evento inválido"}), 400
 
 @app.route("/events", methods=["GET"])
 def events_get():
@@ -174,7 +190,6 @@ def orquestra():
     if not data or "pedido" not in data:
         return jsonify({"erro": "Envie um JSON com a chave 'pedido'"}), 400
     
-    orq = Orquestradora()
     resultado = orq.executar_fluxo(data["pedido"])
     return jsonify(resultado), 200
 
@@ -187,44 +202,19 @@ def miner_status():
     except Exception as e:
         return jsonify({"status": "erro", "message": str(e)}), 500
 
-# --- rodar posters de anúncios ---
-@app.route("/poster/run")
-def poster_run():
+# --- rodar poster de anúncios ---
+@app.route("/poster/run", methods=["GET","POST"])
+def poster_run_endpoint():
     try:
-        count = poster_produtos.run()
-        return jsonify({"status": "ok", "anuncios_criados": count})
+        qtd = poster_produtos.run()
+        return {"message": "Anúncios criados pela AI", "total": qtd}, 200
     except Exception as e:
-        return jsonify({"status": "erro", "message": str(e)}), 500
+        return {"status": "erro", "message": str(e)}, 500
 
 # ---------- Main ----------
 if __name__ == "__main__":
     init_db()
-    print("Mercado Inteligente - Dashboard")
-    print("/produtos")
-    print("/vendedores")
-    print("/ofertas")
-    print("/pedidos")
-    print("/events")
-    print("/ia/status")
-    print("/orquestra")
-    print("/miner/status")
-    print("/poster/run")
-    print("Use API (POST/GET) para interagir.")
     
-    # inicia a orquestradora em background
-    orq = Orquestradora(interval_seconds=60)
-    orq.start_background()
-    
-    app.run(debug=True)
-from ai_postagem import poster_produtos
-
-@app.route("/poster/run", methods=["POST"])
-def poster_run():
-    """
-    Roda o poster_produtos e cria anúncios automáticos para produtos não publicados.
-    """
-    qtd = poster_produtos.run()
-    return {
-        "message": "Anúncios criados pela AI",
-        "total": qtd
-    }, 200
+    # Porta do Render
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
